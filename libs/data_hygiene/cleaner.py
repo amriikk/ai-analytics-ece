@@ -27,3 +27,14 @@ def load_and_clean_spotify_data(file_path: str) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors='coerce')
             
     return df
+
+# Add this below your existing load_and_clean_spotify_data function
+
+_df_cache = {}
+
+def get_cached_dataframe(file_path: str) -> pd.DataFrame:
+    """Fetches the dataframe from memory, or loads it if not present."""
+    if file_path not in _df_cache:
+        print(f"Cache miss: Loading and cleaning {file_path} into memory...")
+        _df_cache[file_path] = load_and_clean_spotify_data(file_path)
+    return _df_cache[file_path]

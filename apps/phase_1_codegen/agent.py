@@ -5,13 +5,13 @@ import pandas as pd
 from typing import TypedDict, Any
 from langgraph.graph import StateGraph, END
 from langchain_anthropic import ChatAnthropic
+from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import HumanMessage, SystemMessage
-from libs.data_hygiene.cleaner import load_and_clean_spotify_data
+from libs.data_hygiene.cleaner import get_cached_dataframe
 
 class AgentState(TypedDict):
     question: str
     csv_path: str
-    dataframe: Any  
     generated_code: str
     execution_result: str
     evaluation: str
@@ -30,7 +30,7 @@ def extract_python_code(text: str) -> str:
 
 def generate_code(state: AgentState):
     print("\n[Node: generate_code] Synthesizing pandas pipeline...")
-    df = state["dataframe"]
+    df = get_cached_dataframe(state["csv_path"])
     columns = list(df.columns)
     
     system_prompt = SystemMessage(content=f"""
@@ -54,7 +54,7 @@ def generate_code(state: AgentState):
 def execute_code(state: AgentState):
     print("[Node: execute_code] Executing generated pipeline...")
     code = state["generated_code"]
-    df = state["dataframe"]
+    df = get_cached_dataframe(state["csv_path"])
     
     # Create an isolated execution environment
     env = {"pd": pd, "df": df}
@@ -137,22 +137,24 @@ workflow.add_conditional_edges(
 )
 workflow.add_edge("generate_answer", END)
 
-app = workflow.compile()
+memory = MemorySaver()
+app = workflow.compile(checkpointer=memory)
 
 if __name__ == "__main__":
     dataset_path = "data/most-streamed-spotify-songs-2024.csv"
-    print(f"Loading and sanitizing dataset from {dataset_path}...")
-    df_clean = load_and_clean_spotify_data(dataset_path)
     
+    # State no longer contains the massive DataFrame object
     test_state = {
         "question": "What is the average Spotify Popularity for explicit tracks vs non-explicit tracks?",
         "csv_path": dataset_path,
-        "dataframe": df_clean,
         "error_count": 0
     }
     
+    # Configure the thread ID for memory persistence in local testing
+    config = {"configurable": {"thread_id": "local-terminal-test"}}
+    
     print(f"\nUser Query: '{test_state['question']}'")
-    result = app.invoke(test_state)
+    result = app.invoke(test_state, config=config)
     
     print("\n--- FINAL OUTPUT ---")
-    print(result["final_answer"])
+    print(result.get("final_answer"))
