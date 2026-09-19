@@ -48,9 +48,12 @@ Ensure you have Python 3.13+ and Poetry installed.
 
 ### Running the Stateful API Server
 To spin up the Phase 2 backend microservice:
+
     ```bash
     python -m apps.phase_2_stateful.server
+
 Test the API endpoint via curl:
+
     ```bash
     curl -X POST http://localhost:8000/api/v1/analyze \
      -H "Content-Type: application/json" \
