@@ -7,7 +7,7 @@ def load_and_clean_spotify_data(file_path: str) -> pd.DataFrame:
     and handles type coercion to ensure high data hygiene before LLM processing.
     """
     try:
-        df = pd.read_csv(file_path, encoding='utf-8')
+        df = pd.read_csv(file_path, encoding='latin1')
     except FileNotFoundError:
         raise FileNotFoundError(f"Dataset not found at {file_path}. Ensure it is in the data/ directory.")
     
