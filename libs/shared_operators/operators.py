@@ -48,6 +48,7 @@ def filter_rows(df: pd.DataFrame, conditions: List[Dict[str, Any]]) -> pd.DataFr
 
 def group_and_aggregate(df: pd.DataFrame, group_by: List[str], metrics: List[Dict[str, Any]]) -> pd.DataFrame:
     """Groups by columns and applies aggregation functions."""
+    df = df.copy()
     agg_dict = {}
     rename_dict = {}
     
@@ -55,8 +56,8 @@ def group_and_aggregate(df: pd.DataFrame, group_by: List[str], metrics: List[Dic
         col = m["column"]
         func = m["function"]
         out_name = m["as"]
-        
-        # HW3 Bug Fix: Do not coerce to numeric if simply counting strings
+                
+        # Counting works on text too, so only convert to numbers for math
         if func != "count":
             df[col] = pd.to_numeric(df[col], errors='coerce')
             
@@ -74,11 +75,8 @@ def sort_rows(df: pd.DataFrame, sort_by: List[Dict[str, str]]) -> pd.DataFrame:
     """Sorts dataframe by specified columns."""
     cols = [s["column"] for s in sort_by]
     asc = [s["direction"] == "asc" for s in sort_by]
-    
-    # Coerce to numeric for accurate sorting
-    for col in cols:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-        
+    # The cleaner already made number columns numeric, so text columns
+    # like Track sort alphabetically instead of turning into blanks.
     return df.sort_values(by=cols, ascending=asc, na_position='last')
 
 def limit_rows(df: pd.DataFrame, k: int) -> pd.DataFrame:

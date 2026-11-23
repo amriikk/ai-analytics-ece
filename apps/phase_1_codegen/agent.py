@@ -4,22 +4,27 @@ import traceback
 import pandas as pd
 from typing import TypedDict, Any
 from langgraph.graph import StateGraph, END
-from langchain_anthropic import ChatAnthropic
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import HumanMessage, SystemMessage
 from libs.data_hygiene.cleaner import get_cached_dataframe
+from libs.llm import make_llm
 
 class AgentState(TypedDict):
     question: str
     csv_path: str
     generated_code: str
     execution_result: str
+    execution_ok: bool
     evaluation: str
+    feedback: str
     final_answer: str
     error_count: int
 
 # Initialize the LLM (Ensure ANTHROPIC_API_KEY is exported in your terminal)
-llm = ChatAnthropic(model="claude-haiku-4-5-20251001", temperature=0)
+llm = make_llm()
+
+# The first try plus one retry. Each retry costs another round of API calls.
+MAX_ATTEMPTS = 2
 
 def extract_python_code(text: str) -> str:
     """Extracts python code from markdown block."""
@@ -45,60 +50,71 @@ def generate_code(state: AgentState):
     Available Columns: {columns}
     """)
     
-    user_prompt = HumanMessage(content=f"Question: {state['question']}")
-    response = llm.invoke([system_prompt, user_prompt])
+    request = f"Question: {state['question']}"
+    if state.get("error_count", 0) > 0:
+        # Retrying: show the model its last attempt and what went wrong
+        request += (
+            f"\n\nYour previous code:\n```python\n{state['generated_code']}\n```"
+            f"\nWhat went wrong: {state['feedback']}\nWrite corrected code."
+        )
+    response = llm.invoke([system_prompt, HumanMessage(content=request)])
     
-    code = extract_python_code(response.content)
+    code = extract_python_code(response.text)
     return {"generated_code": code, "error_count": state.get("error_count", 0)}
 
 def execute_code(state: AgentState):
     print("[Node: execute_code] Executing generated pipeline...")
     code = state["generated_code"]
-    df = get_cached_dataframe(state["csv_path"])
+    # A copy, so generated code can't change the cached data for later questions
+    df = get_cached_dataframe(state["csv_path"]).copy()
     
-    # Create an isolated execution environment
+    # Note: exec() is NOT a sandbox. The code runs with full Python access,
+    # which is why Phase 3 replaces it with a fixed set of checked operators.
     env = {"pd": pd, "df": df}
     
     try:
         exec(code, env)
-        result = env.get("result", "Error: 'result' variable not found.")
-        return {"execution_result": str(result)}
+        if "result" not in env:
+            return {"execution_result": "The code did not store anything in `result`.", "execution_ok": False}
+        return {"execution_result": str(env["result"]), "execution_ok": True}
     except Exception as e:
         error_msg = f"Execution Error: {str(e)}\n{traceback.format_exc()}"
         print(f"  -> {error_msg.splitlines()[0]}")
-        return {"execution_result": error_msg}
+        return {"execution_result": error_msg, "execution_ok": False}
 
 def evaluate_result(state: AgentState):
     print("[Node: evaluate_result] Validating output...")
     execution_result = state["execution_result"]
     
-    if "Execution Error" in execution_result or "Error:" in execution_result:
+    if not state["execution_ok"]:
         print("  -> Execution failed.")
-        return {"evaluation": "FAIL", "error_count": state.get("error_count", 0) + 1}
+        last_line = execution_result.strip().splitlines()[-1]
+        return {"evaluation": "FAIL", "feedback": last_line, "error_count": state.get("error_count", 0) + 1}
         
     system_prompt = SystemMessage(content="""
     You are a validation agent. Evaluate if the execution result answers the question.
-    Respond with EXACTLY 'PASS' if the result is valid and answers the question.
-    Respond with EXACTLY 'FAIL' if the result is incorrect, empty, or invalid.
+    If the result is valid and answers the question, respond with exactly: PASS
+    If it is incorrect, empty, or invalid, respond with: FAIL: <one sentence saying what is wrong>
     """)
     
     user_prompt = HumanMessage(content=f"Question: {state['question']}\nResult: {execution_result}")
     response = llm.invoke([system_prompt, user_prompt])
     
-    eval_status = response.content.strip().upper()
+    verdict = response.text.strip()
+    eval_status = "PASS" if verdict.upper().startswith("PASS") else "FAIL"
     print(f"  -> Validation status: {eval_status}")
     
     new_error_count = state.get("error_count", 0)
     if eval_status == "FAIL":
         new_error_count += 1
         
-    return {"evaluation": eval_status, "error_count": new_error_count}
+    return {"evaluation": eval_status, "feedback": verdict, "error_count": new_error_count}
 
 def generate_answer(state: AgentState):
     print("[Node: generate_answer] Translating to natural language...")
     
     if state["evaluation"] == "FAIL":
-        return {"final_answer": "I was unable to compute a correct answer after multiple attempts."}
+        return {"final_answer": f"I was unable to compute a correct answer after {state['error_count']} attempts."}
         
     system_prompt = SystemMessage(content="""
     Generate a clear, concise natural language answer based ONLY on the provided execution result.
@@ -108,10 +124,10 @@ def generate_answer(state: AgentState):
     user_prompt = HumanMessage(content=f"Question: {state['question']}\nResult: {state['execution_result']}")
     response = llm.invoke([system_prompt, user_prompt])
     
-    return {"final_answer": response.content.strip()}
+    return {"final_answer": response.text.strip()}
 
 def route_evaluation(state: AgentState):
-    if state["evaluation"] == "FAIL" and state["error_count"] < 1:
+    if state["evaluation"] == "FAIL" and state["error_count"] < MAX_ATTEMPTS:
         print("  -> Retrying code generation...")
         return "generate_code"
     return "generate_answer"

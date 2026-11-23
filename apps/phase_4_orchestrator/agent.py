@@ -1,8 +1,8 @@
-from typing import TypedDict, Any
+from typing import TypedDict, Literal
 from langgraph.graph import StateGraph, END
-from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
+from libs.llm import make_llm
 
 # Import the compiled apps from previous phases
 from apps.phase_1_codegen.agent import app as codegen_app
@@ -16,11 +16,12 @@ class OrchestratorState(TypedDict):
     final_answer: str
 
 class RouteDecision(BaseModel):
-    route: str = Field(description="Must be exactly 'DETERMINISTIC' or 'EXPERIMENTAL'")
+    # Literal means Pydantic rejects anything except these two routes
+    route: Literal["DETERMINISTIC", "EXPERIMENTAL"]
     reason: str = Field(description="Brief reason for the routing decision")
 
 # Initialize the router LLM
-llm = ChatAnthropic(model="claude-haiku-4-5-20251001", temperature=0)
+llm = make_llm()
 router_llm = llm.with_structured_output(RouteDecision)
 
 # 2. Define the Supervisor Nodes
