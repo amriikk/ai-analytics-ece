@@ -1,0 +1,23 @@
+# Python bytecode (made automatically each time Python runs)
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+
+# Secrets: never commit API keys
+.env
+.env.*
+
+# Test and tool caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Editors and macOS
+.vscode/
+.idea/
+.DS_Store
