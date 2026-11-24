@@ -1,0 +1,27 @@
+name: Tests
+
+# Runs on every push and every pull request
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: poetry
+
+      - name: Install dependencies
+        run: poetry install --no-interaction
+
+      # No API key needed: the tests replace Claude with scripted replies
+      - name: Run tests
+        run: poetry run pytest -q
