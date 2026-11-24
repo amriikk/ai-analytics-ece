@@ -2,7 +2,7 @@ import operator
 import re
 import traceback
 import pandas as pd
-from typing import TypedDict, Any
+from typing import TypedDict, Annotated
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -19,12 +19,27 @@ class AgentState(TypedDict):
     feedback: str
     final_answer: str
     error_count: int
+    # operator.add tells LangGraph to append new turns instead of replacing the list,
+    # and the checkpointer saves it per session (thread_id), so follow-ups have context
+    history: Annotated[list, operator.add]
 
 # Initialize the LLM (Ensure ANTHROPIC_API_KEY is exported in your terminal)
 llm = make_llm()
 
 # The first try plus one retry. Each retry costs another round of API calls.
 MAX_ATTEMPTS = 2
+
+# How many earlier question/answer pairs to include in prompts
+HISTORY_TURNS = 3
+
+def history_text(state: AgentState) -> str:
+    """Earlier questions and answers in this session, so follow-ups like
+    "what about their YouTube views?" make sense."""
+    turns = state.get("history", [])[-HISTORY_TURNS:]
+    if not turns:
+        return ""
+    lines = [f"Q: {t['question']}\nA: {t['answer']}" for t in turns]
+    return "Earlier in this conversation:\n" + "\n\n".join(lines) + "\n\n"
 
 def extract_python_code(text: str) -> str:
     """Extracts python code from markdown block."""
@@ -50,7 +65,7 @@ def generate_code(state: AgentState):
     Available Columns: {columns}
     """)
     
-    request = f"Question: {state['question']}"
+    request = f"{history_text(state)}Question: {state['question']}"
     if state.get("error_count", 0) > 0:
         # Retrying: show the model its last attempt and what went wrong
         request += (
@@ -97,7 +112,7 @@ def evaluate_result(state: AgentState):
     If it is incorrect, empty, or invalid, respond with: FAIL: <one sentence saying what is wrong>
     """)
     
-    user_prompt = HumanMessage(content=f"Question: {state['question']}\nResult: {execution_result}")
+    user_prompt = HumanMessage(content=f"{history_text(state)}Question: {state['question']}\nResult: {execution_result}")
     response = llm.invoke([system_prompt, user_prompt])
     
     verdict = response.text.strip()
@@ -114,17 +129,20 @@ def generate_answer(state: AgentState):
     print("[Node: generate_answer] Translating to natural language...")
     
     if state["evaluation"] == "FAIL":
-        return {"final_answer": f"I was unable to compute a correct answer after {state['error_count']} attempts."}
+        answer = f"I was unable to compute a correct answer after {state['error_count']} attempts."
+        return {"final_answer": answer, "history": [{"question": state["question"], "answer": answer}]}
         
     system_prompt = SystemMessage(content="""
     Generate a clear, concise natural language answer based ONLY on the provided execution result.
     Do not mention the code or dataframe. Just answer the user's question directly.
     """)
     
-    user_prompt = HumanMessage(content=f"Question: {state['question']}\nResult: {state['execution_result']}")
+    user_prompt = HumanMessage(content=f"{history_text(state)}Question: {state['question']}\nResult: {state['execution_result']}")
     response = llm.invoke([system_prompt, user_prompt])
     
-    return {"final_answer": response.text.strip()}
+    answer = response.text.strip()
+    # Save this turn to the session's history
+    return {"final_answer": answer, "history": [{"question": state["question"], "answer": answer}]}
 
 def route_evaluation(state: AgentState):
     if state["evaluation"] == "FAIL" and state["error_count"] < MAX_ATTEMPTS:
@@ -159,18 +177,14 @@ app = workflow.compile(checkpointer=memory)
 if __name__ == "__main__":
     dataset_path = "data/most-streamed-spotify-songs-2024.csv"
     
-    # State no longer contains the massive DataFrame object
-    test_state = {
-        "question": "What is the average Spotify Popularity for explicit tracks vs non-explicit tracks?",
-        "csv_path": dataset_path,
-        "error_count": 0
-    }
-    
-    # Configure the thread ID for memory persistence in local testing
+    # Both questions use the same thread ID, so the second one can refer to the first
     config = {"configurable": {"thread_id": "local-terminal-test"}}
     
-    print(f"\nUser Query: '{test_state['question']}'")
-    result = app.invoke(test_state, config=config)
-    
-    print("\n--- FINAL OUTPUT ---")
-    print(result.get("final_answer"))
+    for question in [
+        "Which 3 artists have the most total Spotify Streams?",
+        "What about their total YouTube views?",
+    ]:
+        print(f"\nUser Query: '{question}'")
+        result = app.invoke({"question": question, "csv_path": dataset_path, "error_count": 0}, config=config)
+        print("\n--- FINAL OUTPUT ---")
+        print(result.get("final_answer"))

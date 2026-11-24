@@ -14,7 +14,6 @@ class QueryRequest(BaseModel):
     question: str
     session_id: str = "default_session"
 
-
 # A plain "def" (not "async def"): the agent makes slow, blocking API calls,
 # so FastAPI runs each request in its own worker thread instead of freezing the server.
 @app.post("/api/v1/analyze")
@@ -37,7 +36,8 @@ def analyze_data(request: QueryRequest):
             "session_id": request.session_id,
             "question": request.question,
             "final_answer": result.get("final_answer", "No answer generated."),
-            "evaluation_status": result.get("evaluation", "N/A").split("\n")[0]
+            "evaluation_status": result.get("evaluation", "N/A").split("\n")[0],
+            "turns_in_session": len(result.get("history", []))
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

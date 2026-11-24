@@ -19,6 +19,16 @@ dependencies = [
 [tool.poetry]
 package-mode = false
 
+[tool.pytest.ini_options]
+# Run from the repo root so "apps" and "libs" import the same way as in the app
+pythonpath = ["."]
+testpaths = ["tests"]
+
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+[dependency-groups]
+dev = [
+    "pytest (>=9.2.0,<10.0.0)"
+]
