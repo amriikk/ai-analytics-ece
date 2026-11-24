@@ -14,8 +14,11 @@ class QueryRequest(BaseModel):
     question: str
     session_id: str = "default_session"
 
+
+# A plain "def" (not "async def"): the agent makes slow, blocking API calls,
+# so FastAPI runs each request in its own worker thread instead of freezing the server.
 @app.post("/api/v1/analyze")
-async def analyze_data(request: QueryRequest):
+def analyze_data(request: QueryRequest):
     try:
         # State no longer contains the massive DataFrame object
         state = {

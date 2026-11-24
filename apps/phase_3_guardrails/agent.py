@@ -1,16 +1,20 @@
 import pandas as pd
 import traceback
-from typing import TypedDict, List, Dict, Any
+from typing import TypedDict, List, Dict, Any, Literal
 from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, END
-from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
 from libs.data_hygiene.cleaner import get_cached_dataframe
 from libs.shared_operators.operators import OPERATOR_DISPATCH
+from libs.llm import make_llm
 
 # 1. Define the Strict JSON Schema for the Planner
 class Step(BaseModel):
-    operator: str = Field(description="Must be one of: select_columns, filter_rows, derive_columns, group_and_aggregate, sort_rows, limit_rows, distinct_rows")
+    # Literal means Pydantic rejects any operator name that isn't on this list
+    operator: Literal[
+        "select_columns", "filter_rows", "derive_columns", "group_and_aggregate",
+        "sort_rows", "limit_rows", "distinct_rows",
+    ]
     arguments: Dict[str, Any] = Field(description="The exact arguments required by the operator schema")
 
 class ExecutionPlan(BaseModel):
@@ -25,7 +29,7 @@ class AgentState(TypedDict):
     final_answer: str
 
 # Initialize the LLM
-llm = ChatAnthropic(model="claude-haiku-4-5-20251001", temperature=0)
+llm = make_llm()
 # Bind the Pydantic schema to force JSON output
 json_llm = llm.with_structured_output(ExecutionPlan)
 
@@ -38,12 +42,19 @@ def generate_plan(state: AgentState):
     You are a data architect. Map the user's question to a sequence of strict operations.
     Available columns: {list(df.columns)}
     
-    Available operators:
-    - select_columns(columns: List[str])
-    - filter_rows(conditions: List[Dict(column, operator, value)])
-    - group_and_aggregate(group_by: List[str], metrics: List[Dict(column, function, as)])
-    - sort_rows(sort_by: List[Dict(column, direction)])
-    - limit_rows(k: int)
+    Available operators and the exact arguments each one takes:
+    - select_columns: {{"columns": ["Track", "Artist"]}}
+    - filter_rows: {{"conditions": [{{"column": "Explicit Track", "operator": "==", "value": 1}}]}}
+      operator is one of ==, !=, >, <, >=, <=, contains. All conditions must match.
+    - derive_columns: {{"derive": [{{"new_column": "likes_per_view", "type": "arithmetic", "operation": "divide",
+        "left": {{"type": "column", "value": "YouTube Likes"}}, "right": {{"type": "column", "value": "YouTube Views"}}}}]}}
+      operation is one of add, subtract, multiply, divide. For a fixed number use {{"type": "number", "value": 1000}}.
+      Or: {{"derive": [{{"new_column": "release_year", "type": "extract_date_part", "column": "Release Date", "part": "year"}}]}}
+    - group_and_aggregate: {{"group_by": ["Artist"], "metrics": [{{"column": "Spotify Streams", "function": "sum", "as": "total_streams"}}]}}
+      function is one of sum, mean, median, min, max, count.
+    - sort_rows: {{"sort_by": [{{"column": "Spotify Streams", "direction": "desc"}}]}}
+    - limit_rows: {{"k": 5}}
+    - distinct_rows: {{"columns": ["Artist"]}}
     
     Only output the structured plan.
     """)
@@ -79,7 +90,7 @@ def execute_plan(state: AgentState):
         return {"execution_result": result_str}
         
     except Exception as e:
-        error_msg = f"Execution failed: {str(e)}"
+        error_msg = f"Execution failed at step {i+1} ({op_name}): {str(e)}"
         print(f"  -> {error_msg}")
         return {"execution_result": error_msg}
 
@@ -87,7 +98,7 @@ def generate_answer(state: AgentState):
     print("[Node: generate_answer] Translating data back to natural language...")
     
     if "Execution failed" in state["execution_result"]:
-        return {"final_answer": "I encountered a logical error while processing the data plan."}
+        return {"final_answer": f"I couldn't run the data plan. {state['execution_result']}"}
         
     system_prompt = SystemMessage(content="""
     Generate a concise natural language answer based ONLY on the provided execution result table.
@@ -96,7 +107,7 @@ def generate_answer(state: AgentState):
     user_prompt = HumanMessage(content=f"Question: {state['question']}\nResult:\n{state['execution_result']}")
     response = llm.invoke([system_prompt, user_prompt])
     
-    return {"final_answer": response.content.strip()}
+    return {"final_answer": response.text.strip()}
 
 # 4. Build the Graph
 workflow = StateGraph(AgentState)
