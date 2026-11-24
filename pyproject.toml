@@ -1,5 +1,5 @@
 [project]
-name = "ai-analytics"
+name = "csv-data-agent"
 version = "0.1.0"
 description = "Ask questions about a CSV in plain English. Four LangGraph agents, from AI-written pandas code to validated JSON plans, plus a router that picks between them."
 authors = [
